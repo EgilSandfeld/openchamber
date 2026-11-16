@@ -167,6 +167,35 @@ describe('settings helpers', () => {
         .toThrow(TypeError);
     }
   });
+
+  it('round-trips sidebar exclusions through sanitize, merge, serialization and response', () => {
+    const helpers = createTestHelpers();
+    const changes = helpers.sanitizeSettingsUpdate({ sidebarSections: [{
+      kind: 'custom', id: 'inbox', name: 'Inbox', filter: {
+        work: ['in-work'],
+        exclude: {
+          states: ['running', 'running', 'unknown', 42], activity: 'stalled',
+          work: ['done'], pins: [' list ', 'list'], kinds: ['scheduled'], links: ['plan'],
+          projectIds: ['p1'], folders: ['f1'], text: [' noise ', 'noise'],
+          exclude: { states: ['unread'] },
+        },
+      },
+    }] });
+    const saved = helpers.mergePersistedSettings({}, changes);
+    const reloaded = helpers.formatSettingsResponse(JSON.parse(JSON.stringify(saved)));
+    expect(reloaded.sidebarSections[0].filter).toEqual({
+      work: ['in-work'],
+      exclude: { states: ['running'], activity: 'stalled', work: ['done'], pins: ['list'], kinds: ['scheduled'],
+        links: ['plan'], projectIds: ['p1'], folders: ['f1'], text: ['noise'] },
+    });
+    const updated = helpers.mergePersistedSettings(saved, helpers.sanitizeSettingsUpdate({ sidebarShowChatsSection: false }));
+    expect(helpers.formatSettingsResponse(updated).sidebarSections).toEqual(reloaded.sidebarSections);
+    for (const exclude of [null, 42, 'running', ['running']]) {
+      const clean = helpers.sanitizeSettingsUpdate({ sidebarSections: [{ kind: 'custom', id: 'old', name: 'Old', filter: { states: ['unread'], exclude } }] });
+      expect(clean.sidebarSections[0].filter.states).toEqual(['unread']);
+      expect(clean.sidebarSections[0].filter.exclude).toBeUndefined();
+    }
+  });
   it('round-trips telemetry opt-in with the hidden list and preserves it across unrelated writes', () => {
     const helpers = createTestHelpers();
     const legacy = helpers.sanitizeSettingsUpdate({ workStatusHiddenSections: [] });

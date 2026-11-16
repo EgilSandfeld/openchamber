@@ -45,6 +45,28 @@ with its named pin lists. How the rows are drawn stays with the row model
 - Facts derived from session metadata cache by record identity because records
   replace on updates and a sidebar can contain thousands of them. Subagent work
   state does not count as the user's work state.
+- Custom time-grouped sections support `filter.exclude`, with the same values
+  as the positive filter. Every positive category must match one of its values.
+  Any matching excluded value rejects the work, including a value also included.
+  An exclusion-only section is valid. Empty exclusions have no effect.
+- Clicking a selected chip's label toggles its exclusion. Excluded chips show
+  "Not" and expose the pressed state. The separate cross removes either kind.
+  The editor normally selects one activity, included or excluded. Imported
+  positive and negative activity bounds are both shown; removing either bound
+  preserves the other. Whole-project grouping still keeps only positive project
+  IDs. Built-in filters do not change.
+- Exclusions use the same live, plan, and hourly activity dependencies as
+  included conditions. Running and Needs an answer can both match one work.
+  Excluding Running therefore excludes that work even while it needs an answer.
+  A separate Needs an answer section can still show it.
+- "Not Plan" requires a successful plan snapshot for the work's project.
+  Loading, a failed first read, and an unresolved project do not prove absence.
+  A failed refresh keeps the last successful snapshot. Plan knowledge uses
+  sidebar project IDs, while the context store uses path-derived storage IDs.
+- The UI and server validate excluded values at their existing settings
+  boundaries. Existing positive-only settings need no migration. Older builds
+  do not understand exclusions and can drop them when saving sections.
+
 - A section of the user's own lists every work that matches its filter, so one
   work can show in several. Its one choice is about projects: with "Also show
   under projects" off (`claims`), its works leave their projects; on, they stay
@@ -135,6 +157,13 @@ with its named pin lists. How the rows are drawn stays with the row model
   pinned and shows in its project with the pin mark.
 
 ## Decisions
+
+### Why exclusion chips keep separate removal controls
+
+The label toggles inclusion and exclusion, while the cross removes the value.
+This preserves explicit removal and gives keyboard users a named exclusion toggle.
+Exclusions reuse the existing filter categories, without adding nested rules or
+changing section order, claims, or the work facts.
 
 ### Why sections are filters over works and not a second list of sessions
 

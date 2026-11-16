@@ -61,6 +61,7 @@ type FactsContext = {
   runKeyBySessionId: ReadonlyMap<string, string>;
   live: SidebarLiveFacts;
   planSessionIds: SidebarPlanFacts;
+  planKnownProjectIds: ReadonlySet<string>;
   folderByMember: ReadonlyMap<string, SidebarFolderMembership>;
 };
 
@@ -118,6 +119,7 @@ export const buildSidebarWorkFacts = (ref: SidebarWorkRef, context: FactsContext
     hasIssue: topFacts.some((facts) => facts.hasIssue),
     hasTrackerItem: topFacts.some((facts) => facts.hasTrackerItem),
     hasPlan: all.some((session) => context.planSessionIds.has(session.id)),
+    planKnown: ref.projectId !== null && context.planKnownProjectIds.has(ref.projectId),
     hasGoal: topFacts.some((facts) => facts.openGoal),
     lastActivityAt: all.reduce((latest, session) => Math.max(latest, session.time.updated), 0),
     texts: [

@@ -1,15 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import {
   EMPTY_SIDEBAR_SECTION_FILTER,
+  hasSidebarSectionConditions,
   matchesSidebarSectionFilter,
+  sidebarSectionReadsLiveState,
+  sidebarSectionReadsPlans,
+  sidebarSectionReadsActivity,
   sidebarPinListsSchema,
   sidebarSectionsSchema,
   type SidebarWorkFacts,
+  type SidebarSectionFilter,
 } from './sidebarSections';
 
 const facts = (overrides: Partial<SidebarWorkFacts> = {}): SidebarWorkFacts => ({
   kind: 'session', projectId: 'p1', folderId: null, pin: null, inWork: false, done: false, running: false, needsAnswer: false,
-  unread: false, failed: false, looksDone: false, hasPr: false, hasIssue: false, hasTrackerItem: false, hasPlan: false, hasGoal: false, lastActivityAt: 0, texts: [], scheduled: false, ...overrides,
+  unread: false, failed: false, looksDone: false, hasPr: false, hasIssue: false, hasTrackerItem: false, hasPlan: false, planKnown: true, hasGoal: false, lastActivityAt: 0, texts: [], scheduled: false, ...overrides,
 });
 
 describe('sidebarSectionsSchema', () => {
@@ -102,6 +107,154 @@ describe('sidebarSectionsSchema', () => {
     expect(textOf('t')).toEqual([`relay ${'x'.repeat(94)}`]);
     expect(textOf('l')).toEqual(['relay', 'mobile']);
     expect(textOf('o')).toEqual([]);
+  });
+});
+
+describe('sidebar section exclusions', () => {
+  const now = Date.UTC(2026, 10, 16, 12);
+  const inbox: SidebarSectionFilter = {
+    ...EMPTY_SIDEBAR_SECTION_FILTER,
+    work: ['in-work'],
+    exclude: { ...EMPTY_SIDEBAR_SECTION_FILTER, states: ['running'] },
+  };
+
+  test('idle open work survives reading, leaves while running and returns when idle', () => {
+    for (const unread of [true, false]) {
+      expect(matchesSidebarSectionFilter(inbox, facts({ inWork: true, unread }), now)).toBe(true);
+    }
+    expect(matchesSidebarSectionFilter(inbox, facts({ inWork: true, running: true }), now)).toBe(false);
+    expect(matchesSidebarSectionFilter(inbox, facts({ inWork: true, running: false }), now)).toBe(true);
+    expect(matchesSidebarSectionFilter(inbox, facts({ done: true }), now)).toBe(false);
+    expect(matchesSidebarSectionFilter(inbox, facts(), now)).toBe(false);
+  });
+
+  test('running and needs-answer are independent facts, with no implicit exception', () => {
+    const waiting = facts({ inWork: true, running: true, needsAnswer: true });
+    expect(matchesSidebarSectionFilter(inbox, waiting, now)).toBe(false);
+    expect(matchesSidebarSectionFilter({ ...EMPTY_SIDEBAR_SECTION_FILTER, states: ['needs-answer'] }, waiting, now)).toBe(true);
+  });
+
+  test('exclusion-only sections register conditions and their update dependencies', () => {
+    expect(hasSidebarSectionConditions({ ...EMPTY_SIDEBAR_SECTION_FILTER, exclude: EMPTY_SIDEBAR_SECTION_FILTER })).toBe(false);
+    const live = { ...EMPTY_SIDEBAR_SECTION_FILTER, exclude: inbox.exclude };
+    expect(hasSidebarSectionConditions(live)).toBe(true);
+    expect(sidebarSectionReadsLiveState(live)).toBe(true);
+    expect(matchesSidebarSectionFilter(live, facts(), now)).toBe(true);
+    expect(matchesSidebarSectionFilter(live, facts({ running: true }), now)).toBe(false);
+    const plans: SidebarSectionFilter = { ...EMPTY_SIDEBAR_SECTION_FILTER, exclude: { ...EMPTY_SIDEBAR_SECTION_FILTER, links: ['plan'] } };
+    expect(sidebarSectionReadsPlans(plans)).toBe(true);
+    expect(sidebarSectionReadsPlans(EMPTY_SIDEBAR_SECTION_FILTER)).toBe(false);
+    expect(sidebarSectionReadsLiveState(plans)).toBe(false);
+    const activity: SidebarSectionFilter = { ...EMPTY_SIDEBAR_SECTION_FILTER, exclude: { ...EMPTY_SIDEBAR_SECTION_FILTER, activity: 'stalled' } };
+    expect(hasSidebarSectionConditions(activity)).toBe(true);
+    expect(sidebarSectionReadsActivity(activity)).toBe(true);
+    expect(sidebarSectionReadsActivity(EMPTY_SIDEBAR_SECTION_FILTER)).toBe(false);
+  });
+
+  test('included values use OR, categories use AND, and any exclusion vetoes', () => {
+    const filter: SidebarSectionFilter = {
+      ...EMPTY_SIDEBAR_SECTION_FILTER, states: ['unread', 'needs-answer'], projectIds: ['p1', 'p2'],
+      exclude: { ...EMPTY_SIDEBAR_SECTION_FILTER, states: ['running', 'failed'], projectIds: ['p2'] },
+    };
+    expect(matchesSidebarSectionFilter(filter, facts({ unread: true }), now)).toBe(true);
+    expect(matchesSidebarSectionFilter(filter, facts({ needsAnswer: true }), now)).toBe(true);
+    expect(matchesSidebarSectionFilter(filter, facts(), now)).toBe(false);
+    expect(matchesSidebarSectionFilter(filter, facts({ unread: true, projectId: 'p3' }), now)).toBe(false);
+    expect(matchesSidebarSectionFilter(filter, facts({ unread: true, running: true }), now)).toBe(false);
+    expect(matchesSidebarSectionFilter(filter, facts({ unread: true, failed: true }), now)).toBe(false);
+    expect(matchesSidebarSectionFilter(filter, facts({ unread: true, projectId: 'p2' }), now)).toBe(false);
+    expect(matchesSidebarSectionFilter({ ...filter, exclude: { ...EMPTY_SIDEBAR_SECTION_FILTER, states: ['unread'] } }, facts({ unread: true }), now)).toBe(false);
+  });
+
+  test('each exclusion vetoes independently and absent values do not match it', () => {
+    const cases: { exclude: Partial<NonNullable<SidebarSectionFilter['exclude']>>; matching: Partial<SidebarWorkFacts>; other?: Partial<SidebarWorkFacts> }[] = [
+      { exclude: { states: ['needs-answer'] }, matching: { needsAnswer: true } },
+      { exclude: { states: ['looks-done'] }, matching: { looksDone: true } },
+      { exclude: { work: ['in-work'] }, matching: { inWork: true } },
+      { exclude: { work: ['done'] }, matching: { done: true } },
+      { exclude: { pins: ['favorites'] }, matching: { pin: 'favorites' } },
+      { exclude: { kinds: ['session'] }, matching: { kind: 'session' }, other: { kind: 'worktree' } },
+      { exclude: { kinds: ['scheduled'] }, matching: { kind: 'worktree', scheduled: true } },
+      { exclude: { links: ['pr'] }, matching: { hasPr: true } },
+      { exclude: { links: ['issue'] }, matching: { hasIssue: true } },
+      { exclude: { links: ['tracker'] }, matching: { hasTrackerItem: true } },
+      { exclude: { links: ['plan'] }, matching: { hasPlan: true } },
+      { exclude: { links: ['goal'] }, matching: { hasGoal: true } },
+      { exclude: { projectIds: ['p1'] }, matching: { projectId: 'p1' }, other: { projectId: null } },
+      { exclude: { folders: ['f1'] }, matching: { folderId: 'f1' } },
+      { exclude: { text: ['relay fix'] }, matching: { texts: ['Fix the relay'] } },
+    ];
+    for (const { exclude, matching, other } of cases) {
+      const filter = { ...EMPTY_SIDEBAR_SECTION_FILTER, exclude: { ...EMPTY_SIDEBAR_SECTION_FILTER, ...exclude } };
+      expect(matchesSidebarSectionFilter(filter, facts(matching), now)).toBe(false);
+      expect(matchesSidebarSectionFilter(filter, facts(other), now)).toBe(true);
+    }
+  });
+
+  test('not stalled keeps unknown activity and the exact three-day boundary', () => {
+    const filter: SidebarSectionFilter = { ...EMPTY_SIDEBAR_SECTION_FILTER, exclude: { ...EMPTY_SIDEBAR_SECTION_FILTER, activity: 'stalled' } };
+    const boundary = now - 3 * 24 * 60 * 60 * 1000;
+    for (const lastActivityAt of [0, boundary, boundary + 1]) {
+      expect(matchesSidebarSectionFilter(filter, facts({ lastActivityAt }), now)).toBe(true);
+    }
+    expect(matchesSidebarSectionFilter(filter, facts({ lastActivityAt: boundary - 1 }), now)).toBe(false);
+  });
+
+  test('Not Plan waits for known plan data while positive Plan keeps matching known links', () => {
+    const negative: SidebarSectionFilter = { ...EMPTY_SIDEBAR_SECTION_FILTER,
+      exclude: { ...EMPTY_SIDEBAR_SECTION_FILTER, links: ['plan'] } };
+    expect(matchesSidebarSectionFilter(negative, { ...facts(), planKnown: false }, now)).toBe(false);
+    expect(matchesSidebarSectionFilter(negative, { ...facts(), planKnown: true }, now)).toBe(true);
+    expect(matchesSidebarSectionFilter(negative, { ...facts({ hasPlan: true }), planKnown: true }, now)).toBe(false);
+    expect(matchesSidebarSectionFilter({ ...EMPTY_SIDEBAR_SECTION_FILTER, links: ['plan'] },
+      { ...facts({ hasPlan: true }), planKnown: false }, now)).toBe(true);
+  });
+
+  test('schema round-trip validates exclusions without changing legacy filters or project groups', () => {
+    const legacy = { ...EMPTY_SIDEBAR_SECTION_FILTER, work: ['in-work'] };
+    const parsed = sidebarSectionsSchema.parse([
+      { kind: 'custom', id: 'negative', name: 'Negative', filter: { exclude: {
+        states: ['running', 'running', 'unknown'], links: ['plan', 42], text: [' relay ', 'relay'],
+        exclude: { states: ['unread'] },
+      } } },
+      { kind: 'custom', id: 'legacy', name: 'Legacy', filter: legacy },
+      { kind: 'custom', id: 'malformed', name: 'Malformed', filter: { ...legacy, exclude: 42 } },
+      { kind: 'custom', id: 'group', name: 'Projects', grouping: 'project', filter: { ...inbox, projectIds: ['p1'] } },
+    ]);
+    const filterOf = (id: string) => {
+      const section = parsed.find((entry) => entry.id === id);
+      if (!section || section.kind !== 'custom') throw new Error(`Missing section ${id}`);
+      return section.filter;
+    };
+    expect(filterOf('negative').exclude).toEqual({ ...EMPTY_SIDEBAR_SECTION_FILTER, states: ['running'], links: ['plan'], text: ['relay'] });
+    expect(filterOf('legacy')).toEqual(legacy);
+    expect(filterOf('malformed')).toEqual(legacy);
+    expect(filterOf('group')).toEqual({ ...EMPTY_SIDEBAR_SECTION_FILTER, projectIds: ['p1'] });
+    expect(sidebarSectionsSchema.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
+  });
+
+  test('stored positive and negative activity bounds both apply', () => {
+    const filter: SidebarSectionFilter = { ...EMPTY_SIDEBAR_SECTION_FILTER, activity: 'week',
+      exclude: { ...EMPTY_SIDEBAR_SECTION_FILTER, activity: 'stalled' } };
+    const parsed = sidebarSectionsSchema.parse([{ kind: 'custom', id: 'active', name: 'Active', filter }]);
+    const section = parsed.find((entry) => entry.id === 'active');
+    if (!section || section.kind !== 'custom') throw new Error('Missing active section');
+    expect(section.filter).toEqual(filter);
+    expect(matchesSidebarSectionFilter(section.filter, facts({ lastActivityAt: now - 60_000 }), now)).toBe(true);
+    expect(matchesSidebarSectionFilter(section.filter, facts({ lastActivityAt: now - 4 * 24 * 60 * 60 * 1000 }), now)).toBe(false);
+    expect(matchesSidebarSectionFilter(section.filter, facts({ lastActivityAt: now - 8 * 24 * 60 * 60 * 1000 }), now)).toBe(false);
+  });
+
+  test('explicitly undefined exclusion fields receive the same defaults as included fields', () => {
+    const sections = sidebarSectionsSchema.parse([{ kind: 'custom', id: 'partial', name: 'Partial', filter: {
+      exclude: { states: undefined, work: undefined, pins: undefined, kinds: undefined, links: undefined,
+        projectIds: undefined, folders: undefined, activity: undefined, text: undefined },
+    } }]);
+    const section = sections.find((entry) => entry.id === 'partial');
+    if (!section || section.kind !== 'custom') throw new Error('Missing partial section');
+    expect(section.filter.exclude).toEqual(EMPTY_SIDEBAR_SECTION_FILTER);
+    expect(hasSidebarSectionConditions(section.filter)).toBe(false);
+    expect(matchesSidebarSectionFilter(section.filter, facts(), now)).toBe(true);
   });
 });
 

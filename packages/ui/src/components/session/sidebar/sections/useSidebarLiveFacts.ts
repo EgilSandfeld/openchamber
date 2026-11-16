@@ -109,3 +109,5 @@ export const useSidebarPlanSessions = (projects: readonly ProjectRef[]): Readonl
     return ids;
   }, [entries, projects]);
 };
+
+export { useSidebarPlanKnownProjects } from './useSidebarPlanKnownProjects';

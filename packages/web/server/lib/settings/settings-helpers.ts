@@ -1,3 +1,4 @@
+import { sidebarSectionFilterSchema } from './sidebar-section-filter.js';
 import { z } from 'zod';
 import { createRequire } from 'node:module';
 
@@ -64,20 +65,6 @@ const SIDEBAR_BUILTIN_SECTION_IDS = ['pages', 'chats', 'pinned', 'work', 'projec
 const SIDEBAR_SECTIONS_STORED_MAX = 24 + SIDEBAR_BUILTIN_SECTION_IDS.length;
 const sidebarSectionIdSchema = z.string().trim().min(1).max(64);
 const sidebarSectionNameSchema = z.string().trim().min(1).transform((value) => value.slice(0, 60));
-const sidebarChips = (values: string[]) => z.array(z.unknown()).transform((entries) => (
-  [...new Set(entries.flatMap((entry) => {
-    const parsed = z.enum(values).safeParse(entry);
-    return parsed.success ? [parsed.data] : [];
-  }))]
-));
-const sidebarIdList = (schema: z.ZodString) => z.array(z.unknown()).transform((entries) => (
-  [...new Set(entries.flatMap((entry) => {
-    const parsed = schema.safeParse(entry);
-    return parsed.success ? [parsed.data] : [];
-  }))]
-));
-const sidebarIds = sidebarIdList(sidebarSectionIdSchema);
-const sidebarProjectIds = sidebarIdList(z.string().trim().min(1).max(4096));
 const sidebarSectionSchema = z.union([
   z.object({ kind: z.literal('builtin'), id: z.enum(SIDEBAR_BUILTIN_SECTION_IDS) }),
   z.object({
@@ -85,22 +72,7 @@ const sidebarSectionSchema = z.union([
     id: sidebarSectionIdSchema,
     name: sidebarSectionNameSchema,
     grouping: z.enum(['time', 'project']).catch('time'),
-    filter: z.object({
-      states: sidebarChips(['running', 'needs-answer', 'unread', 'failed', 'looks-done']).catch([]),
-      work: sidebarChips(['in-work', 'done']).catch([]),
-      pins: sidebarIds.catch([]),
-      kinds: sidebarChips(['session', 'worktree', 'space', 'run', 'scheduled']).catch([]),
-      links: sidebarChips(['pr', 'issue', 'tracker', 'plan', 'goal']).catch([]),
-      projectIds: sidebarProjectIds.catch([]),
-      folders: sidebarIds.catch([]),
-      activity: z.enum(['any', 'today', 'two-days', 'week', 'stalled']).catch('any'),
-      text: z.union([z.string().transform((value) => [value]), z.array(z.unknown())]).transform((entries) => (
-        [...new Set(entries.flatMap((entry) => {
-          const phrase = z.string().trim().transform((value) => value.slice(0, 100)).safeParse(entry);
-          return phrase.success && phrase.data ? [phrase.data] : [];
-        }))].slice(0, 12)
-      )).catch([]),
-    }).partial().catch({}),
+    filter: sidebarSectionFilterSchema,
     claims: z.boolean().catch(false),
     hideWhenEmpty: z.boolean().catch(true),
   }),

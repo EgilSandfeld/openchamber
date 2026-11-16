@@ -19,6 +19,7 @@ export type SidebarSectionActivity = typeof SIDEBAR_SECTION_ACTIVITY[number];
 export const DEFAULT_PIN_LIST = 'pinned';
 
 export type SidebarSectionFilter = {
+  exclude?: SidebarSectionFilterValues;
   states: readonly SidebarSectionState[];
   work: readonly SidebarSectionWorkState[];
   pins: readonly string[];
@@ -98,12 +99,14 @@ const filterSchema = z.object({
   )).catch([]),
 }).partial();
 
+const filterWithExclusionSchema = filterSchema.extend({ exclude: filterSchema.optional().catch(undefined) });
+
 const customSchema = z.object({
   kind: z.literal('custom'),
   id: idSchema,
   name: nameSchema,
   grouping: z.enum(['time', 'project']).catch('time'),
-  filter: filterSchema.catch({}),
+  filter: filterWithExclusionSchema.catch({}),
   claims: z.boolean().catch(false),
   hideWhenEmpty: z.boolean().catch(true),
 });
@@ -146,7 +149,7 @@ export const sidebarSectionsSchema = z.array(z.unknown()).transform((stored): Si
     seen.add(custom.data.id);
     entries.push({
       ...custom.data,
-      filter: toFilter(custom.data.filter, custom.data.grouping),
+      filter: withExclusion(toFilter(custom.data.filter, custom.data.grouping), custom.data.filter, custom.data.grouping),
       claims: custom.data.grouping === 'project' ? true : custom.data.claims,
     });
   }
@@ -188,12 +191,14 @@ export const hasSidebarSectionConditions = (filter: SidebarSectionFilter): boole
   || filter.folders.length > 0
   || filter.activity !== 'any'
   || filter.text.length > 0
+  || (filter.exclude !== undefined && hasSidebarSectionConditions(filter.exclude))
 );
 
-export const sidebarSectionReadsPlans = (filter: SidebarSectionFilter): boolean => filter.links.includes('plan');
+export const sidebarSectionReadsPlans = (filter: SidebarSectionFilter): boolean => filter.links.includes('plan') || filter.exclude?.links.includes('plan') === true;
 
 export const sidebarSectionReadsLiveState = (filter: SidebarSectionFilter): boolean => (
   filter.states.some((state) => state !== 'looks-done')
+  || filter.exclude?.states.some((state) => state !== 'looks-done') === true
 );
 
 export type SidebarWorkFacts = {
@@ -213,6 +218,7 @@ export type SidebarWorkFacts = {
   hasIssue: boolean;
   hasTrackerItem: boolean;
   hasPlan: boolean;
+  planKnown: boolean;
   hasGoal: boolean;
   lastActivityAt: number;
   texts: readonly string[];
@@ -258,6 +264,7 @@ const matchesLink = (link: SidebarSectionLink, facts: SidebarWorkFacts): boolean
 };
 
 export const matchesSidebarSectionFilter = (filter: SidebarSectionFilter, facts: SidebarWorkFacts, now: number): boolean => {
+  if (filter.exclude && matchesSidebarSectionExclusion(filter.exclude, facts, now)) return false;
   if (filter.states.length > 0 && !filter.states.some((state) => matchesState(state, facts))) return false;
   if (filter.work.length > 0 && !filter.work.some((state) => (state === 'in-work' ? facts.inWork : facts.done))) return false;
   if (filter.pins.length > 0 && (facts.pin === null || !filter.pins.includes(facts.pin))) return false;
@@ -286,4 +293,28 @@ export const createSidebarSectionFromTemplate = (template: SidebarSectionTemplat
     case 'projects': return { ...base, grouping: 'project', claims: true, hideWhenEmpty: false };
     case 'blank': return base;
   }
+};
+
+export type SidebarSectionFilterValues = Omit<SidebarSectionFilter, 'exclude'>;
+
+const withExclusion = (filter: SidebarSectionFilter, raw: z.infer<typeof filterWithExclusionSchema>, grouping: 'time' | 'project'): SidebarSectionFilter => (
+  grouping === 'time' && raw.exclude ? { ...filter, exclude: toFilter(raw.exclude, 'time') } : filter
+);
+
+export const sidebarSectionReadsActivity = (filter: SidebarSectionFilter): boolean => (
+  filter.activity !== 'any' || (filter.exclude !== undefined && filter.exclude.activity !== 'any')
+);
+
+const matchesSidebarSectionExclusion = (excluded: SidebarSectionFilterValues, facts: SidebarWorkFacts, now: number): boolean => {
+  if (excluded.links.includes('plan') && !facts.planKnown) return true;
+  if (excluded.states.some((state) => matchesState(state, facts))) return true;
+  if (excluded.work.some((state) => (state === 'in-work' ? facts.inWork : facts.done))) return true;
+  if (facts.pin !== null && excluded.pins.includes(facts.pin)) return true;
+  if (excluded.kinds.some((kind) => (kind === 'scheduled' ? facts.scheduled : kind === facts.kind))) return true;
+  if (excluded.links.some((link) => matchesLink(link, facts))) return true;
+  if (facts.projectId !== null && excluded.projectIds.includes(facts.projectId)) return true;
+  if (facts.folderId !== null && excluded.folders.includes(facts.folderId)) return true;
+  if (excluded.text.some((phrase) => matchesRankQuery(facts.texts, phrase, SIDEBAR_SEARCH))) return true;
+  if (excluded.activity !== 'any' && matchesActivity(excluded.activity, facts.lastActivityAt, now)) return true;
+  return false;
 };

@@ -1,3 +1,5 @@
+import { FilterChip } from './FilterChip';
+import { selectedConditionValues, toggleWithExclusion, toggleExclusionPolarity, clearWithExclusion } from './sectionExclusionEditor';
 import React from 'react';
 import { Popover } from '@base-ui/react/popover';
 import { DndContext, closestCenter, type DragEndEvent } from '@dnd-kit/core';
@@ -26,6 +28,7 @@ import { projectPathFromId } from '@/lib/projectId';
 import {
   createSidebarSectionFromTemplate,
   DEFAULT_PIN_LIST,
+  EMPTY_SIDEBAR_SECTION_FILTER,
   hasSidebarSectionConditions,
   SIDEBAR_SECTION_ACTIVITY,
   SIDEBAR_SECTION_KINDS,
@@ -360,7 +363,7 @@ const conditionValues = (filter: SidebarSectionFilter, category: ConditionCatego
   return filter[category];
 };
 
-const toggleCondition = (filter: SidebarSectionFilter, category: Exclude<ConditionCategory, 'text'>, value: string): SidebarSectionFilter => {
+const toggleCondition = (filter: SidebarSectionFilter, category: ConditionCategory, value: string): SidebarSectionFilter => {
   if (category === 'activity') {
     const activity = SIDEBAR_SECTION_ACTIVITY.find((entry) => entry === value) ?? 'any';
     return { ...filter, activity: filter.activity === activity ? 'any' : activity };
@@ -417,25 +420,30 @@ const SectionEditor: React.FC<{ draft: CustomSidebarSection }> = ({ draft }) => 
     }
   };
   const [order, setOrder] = React.useState<readonly ConditionCategory[]>(() => (
-    TIME_CATEGORIES.filter((category) => conditionValues(draft.filter, category).length > 0)
+    TIME_CATEGORIES.filter((category) => selectedConditionValues(draft.filter, category, conditionValues).length > 0)
   ));
   const placeCondition = (category: ConditionCategory, asks: boolean): void => setOrder((current) => {
     if (!asks) return current.filter((entry) => entry !== category);
     return current.includes(category) ? current : [...current, category];
   });
-  const toggle = (category: Exclude<ConditionCategory, 'text'>, value: string): void => {
-    const filter = toggleCondition(draft.filter, category, value);
-    placeCondition(category, conditionValues(filter, category).length > 0);
+  const toggle = (category: ConditionCategory, value: string): void => {
+    const filter = toggleWithExclusion(draft.filter, category, value, byProjects, conditionValues, toggleCondition);
+    placeCondition(category, selectedConditionValues(filter, category, conditionValues).length > 0);
+    updateSectionDraft({ ...draft, filter });
+  };
+  const togglePolarity = (category: ConditionCategory, value: string): void => {
+    const filter = toggleExclusionPolarity(draft.filter, category, value, conditionValues, toggleCondition);
     updateSectionDraft({ ...draft, filter });
   };
   const removeCondition = (category: ConditionCategory): void => {
     placeCondition(category, false);
     if (category === 'text') setPhraseDraft(null);
-    updateSectionDraft({ ...draft, filter: clearCondition(draft.filter, category) });
+    const filter = clearWithExclusion(draft.filter, category, clearCondition);
+    updateSectionDraft({ ...draft, filter });
   };
   const categories: readonly ConditionCategory[] = byProjects ? ['projectIds'] : TIME_CATEGORIES;
   const isShown = (category: ConditionCategory): boolean => (
-    byProjects || conditionValues(draft.filter, category).length > 0 || (category === 'text' && phraseDraft !== null)
+    byProjects || selectedConditionValues(draft.filter, category, conditionValues).length > 0 || (category === 'text' && phraseDraft !== null)
   );
   const shown = byProjects ? categories : [
     ...order.filter(isShown),
@@ -452,20 +460,16 @@ const SectionEditor: React.FC<{ draft: CustomSidebarSection }> = ({ draft }) => 
   }
   const commitPhrase = (): void => {
     const phrase = (phraseDraft ?? '').trim().slice(0, SIDEBAR_SECTION_TEXT_MAX);
-    const phrases = phrase && !draft.filter.text.includes(phrase)
-      ? [...draft.filter.text, phrase].slice(0, SIDEBAR_SECTION_PHRASES_MAX)
+    const selected = selectedConditionValues(draft.filter, 'text', conditionValues);
+    const phrases = phrase && !selected.includes(phrase) && selected.length < SIDEBAR_SECTION_PHRASES_MAX
+      ? [...draft.filter.text, phrase]
       : draft.filter.text;
     setPhraseDraft(null);
-    placeCondition('text', phrases.length > 0);
+    placeCondition('text', phrases.length > 0 || (draft.filter.exclude?.text.length ?? 0) > 0);
     if (phrases !== draft.filter.text) updateSectionDraft({ ...draft, filter: { ...draft.filter, text: phrases } });
   };
-  const removePhrase = (phrase: string): void => {
-    const phrases = draft.filter.text.filter((entry) => entry !== phrase);
-    placeCondition('text', phrases.length > 0 || phraseDraft !== null);
-    updateSectionDraft({ ...draft, filter: { ...draft.filter, text: phrases } });
-  };
   const optionItems = (category: Exclude<ConditionCategory, 'text'>) => {
-    const values = conditionValues(draft.filter, category);
+    const values = byProjects ? conditionValues(draft.filter, category) : selectedConditionValues(draft.filter, category, conditionValues);
     return optionsOf(category).map((option) => (
       <DropdownMenuItem key={option.value} closeOnClick={category === 'activity'} onClick={() => toggle(category, option.value)} className="flex items-center justify-between gap-3">
         <span className="min-w-0 truncate" dir="auto">{option.label}</span>
@@ -515,18 +519,10 @@ const SectionEditor: React.FC<{ draft: CustomSidebarSection }> = ({ draft }) => 
                 <div key={category} className="oc-tile flex items-start gap-2 rounded-md py-1.5 ps-2.5 pe-1">
                   <span className="flex h-6 shrink-0 items-center typography-ui-label text-muted-foreground">{textLabel}</span>
                   <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 py-0.5">
-                    {draft.filter.text.map((phrase) => (
-                      <span key={phrase} className="oc-tile-inset inline-flex h-5 min-w-0 max-w-full items-center gap-0.5 rounded ps-1.5 typography-micro text-foreground">
-                        <span className="min-w-0 truncate" dir="auto">{phrase}</span>
-                        <button
-                          type="button"
-                          className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-                          aria-label={t('sessions.sidebar.sections.removeCondition', { name: phrase })}
-                          onClick={() => removePhrase(phrase)}
-                        >
-                          <Icon name="close" className="size-3" />
-                        </button>
-                      </span>
+                    {selectedConditionValues(draft.filter, 'text', conditionValues).map((phrase) => (
+                      <FilterChip key={phrase} label={phrase}
+                        excluded={draft.filter.exclude?.text.includes(phrase) === true}
+                        onToggle={() => togglePolarity('text', phrase)} onRemove={() => toggle('text', phrase)} />
                     ))}
                     {phraseDraft !== null ? (
                       <input
@@ -546,13 +542,13 @@ const SectionEditor: React.FC<{ draft: CustomSidebarSection }> = ({ draft }) => 
                             event.preventDefault();
                             event.stopPropagation();
                             setPhraseDraft(null);
-                            placeCondition('text', draft.filter.text.length > 0);
+                            placeCondition('text', selectedConditionValues(draft.filter, 'text', conditionValues).length > 0);
                           }
                         }}
                         className="h-5 min-w-24 flex-1 bg-transparent px-1 typography-micro text-foreground outline-none placeholder:text-muted-foreground"
                         dir="auto"
                       />
-                    ) : draft.filter.text.length < SIDEBAR_SECTION_PHRASES_MAX ? (
+                    ) : selectedConditionValues(draft.filter, 'text', conditionValues).length < SIDEBAR_SECTION_PHRASES_MAX ? (
                       <button type="button" onClick={() => setPhraseDraft('')} className="inline-flex h-5 items-center gap-0.5 rounded border border-dashed border-[color-mix(in_srgb,var(--foreground)_24%,transparent)] px-1.5 typography-micro text-muted-foreground hover:border-[color-mix(in_srgb,var(--foreground)_40%,transparent)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50">
                         <Icon name="add" className="size-3" />
                         {t('sessions.sidebar.sections.addValue')}
@@ -565,7 +561,7 @@ const SectionEditor: React.FC<{ draft: CustomSidebarSection }> = ({ draft }) => 
                 </div>
               );
             }
-            const values = conditionValues(draft.filter, category);
+            const values = byProjects ? draft.filter.projectIds : selectedConditionValues(draft.filter, category, conditionValues);
             const options = optionsOf(category);
             const categoryLabel = t(CATEGORY_KEY[category]);
             const addLabel = byProjects && values.length === 0
@@ -580,17 +576,10 @@ const SectionEditor: React.FC<{ draft: CustomSidebarSection }> = ({ draft }) => 
                     const label = options.find((option) => option.value === value)?.label
                       ?? (path ? formatDirectoryName(path, null) : value);
                     return (
-                      <span key={value} className="oc-tile-inset inline-flex h-5 min-w-0 max-w-full items-center gap-0.5 rounded ps-1.5 typography-micro text-foreground">
-                        <span className="min-w-0 truncate" dir="auto">{label}</span>
-                        <button
-                          type="button"
-                          className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-                          aria-label={t('sessions.sidebar.sections.removeCondition', { name: label })}
-                          onClick={() => toggle(category, value)}
-                        >
-                          <Icon name="close" className="size-3" />
-                        </button>
-                      </span>
+                      <FilterChip key={value} label={label}
+                        excluded={!byProjects && conditionValues(draft.filter.exclude ?? EMPTY_SIDEBAR_SECTION_FILTER, category).includes(value)}
+                        onToggle={byProjects ? undefined : () => togglePolarity(category, value)}
+                        onRemove={() => toggle(category, value)} />
                     );
                   })}
                   {category !== 'activity' && options.some((option) => !values.includes(option.value)) ? (

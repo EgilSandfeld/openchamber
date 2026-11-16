@@ -7,7 +7,7 @@ const ref = (id: string, projectId = 'p1'): SidebarWorkRef => ({ kind: 'session'
 
 const facts = (overrides: Partial<SidebarWorkFacts> = {}): SidebarWorkFacts => ({
   kind: 'session', projectId: 'p1', folderId: null, pin: null, inWork: false, done: false, running: false, needsAnswer: false,
-  unread: false, failed: false, looksDone: false, hasPr: false, hasIssue: false, hasTrackerItem: false, hasPlan: false, hasGoal: false, lastActivityAt: 0, texts: [], scheduled: false, ...overrides,
+  unread: false, failed: false, looksDone: false, hasPr: false, hasIssue: false, hasTrackerItem: false, hasPlan: false, planKnown: true, hasGoal: false, lastActivityAt: 0, texts: [], scheduled: false, ...overrides,
 });
 
 const section = (id: string, overrides: Partial<CustomSidebarSection> = {}): CustomSidebarSection => ({
@@ -40,6 +40,17 @@ describe('resolveSidebarSectionMembership', () => {
     const result = resolve([custom(section('blank', { claims: true }))]);
     expect(result.custom.get('blank')).toEqual([]);
     expect(result.claimedKeys.size).toBe(0);
+  });
+
+  test('exclusion-only sections match independently and claim only matching works', () => {
+    const result = resolve([
+      custom(section('idle', { claims: true, filter: { ...EMPTY_SIDEBAR_SECTION_FILTER,
+        exclude: { ...EMPTY_SIDEBAR_SECTION_FILTER, states: ['running'] } } })),
+      custom(section('all', { filter: { ...EMPTY_SIDEBAR_SECTION_FILTER, projectIds: ['p1', 'p2'] } })),
+    ]);
+    expect(result.custom.get('idle')?.map((work) => work.key)).toEqual(['session:c']);
+    expect(result.custom.get('all')?.map((work) => work.key)).toEqual(['session:a', 'session:b', 'session:c']);
+    expect([...result.claimedKeys]).toEqual(['session:c']);
   });
 
   test('a section that does not claim lets its works through and only lists them', () => {

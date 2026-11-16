@@ -62,9 +62,9 @@ import { useSidebarBlockDragStore } from './blockDrag';
 import { resolveSidebarSectionMembership, resolveVisibleSidebarSections } from '../sections/sectionMembership';
 import { useSidebarPages } from '../pages/useSidebarPages';
 import { buildSidebarWorkFacts } from '../sections/workFacts';
-import { useSidebarLiveFacts, useSidebarPlanSessions, useSidebarSectionsNow } from '../sections/useSidebarLiveFacts';
+import { useSidebarLiveFacts, useSidebarPlanKnownProjects, useSidebarPlanSessions, useSidebarSectionsNow } from '../sections/useSidebarLiveFacts';
 import { useSidebarSectionsUiStore } from '../sections/sectionActions';
-import { DEFAULT_PIN_LIST, sidebarSectionReadsLiveState, sidebarSectionReadsPlans, type SidebarWorkFacts } from '@/lib/sidebarSections';
+import { DEFAULT_PIN_LIST, sidebarSectionReadsActivity, sidebarSectionReadsLiveState, sidebarSectionReadsPlans, type SidebarWorkFacts } from '@/lib/sidebarSections';
 import { useRemovingWorktreePaths } from '@/lib/worktrees/worktreeRemovalState';
 import { buildSessionRootIndex, buildSidebarWorkIndex, buildWorktreeArchiveAnchors, isFiledInFolder, isGroupWork, orderInWorkWorks, orderSidebarWorks, type SidebarFolderMembership, type SidebarWorkRef } from '../works/sidebarWorks';
 import { getSessionLifecycleOrderValue } from '@/sync/session-ordering';
@@ -505,9 +505,9 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     if (!planProjectIds) return NO_PLAN_PROJECTS;
     return topology.projects.filter((project) => planProjectIds === 'all' || planProjectIds.has(project.id));
   }, [planProjectIds, topology.projects]);
-  const planSessionIds = useSidebarPlanSessions(planProjects);
+  const [planSessionIds, planKnownProjectIds] = [useSidebarPlanSessions(planProjects), useSidebarPlanKnownProjects(planProjects)];
   const sectionsNow = useSidebarSectionsNow(view.isVisible && visibleSections.some((section) => (
-    section.kind === 'custom' && section.section.grouping === 'time' && section.section.filter.activity !== 'any'
+    section.kind === 'custom' && section.section.grouping === 'time' && sidebarSectionReadsActivity(section.section.filter)
   )));
   const workIndex = React.useMemo(() => buildSidebarWorkIndex(projectSections), [projectSections]);
   const worktreeArchiveAnchors = React.useMemo(() => buildWorktreeArchiveAnchors({
@@ -635,7 +635,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     return byMember;
   }, [foldersMap, topology.projects]);
   const membership = React.useMemo(() => {
-    const context = { sessionById: collection.sessionById, childrenMap: collection.childrenMap, runKeyBySessionId, live: liveFacts, planSessionIds, folderByMember };
+    const context = { sessionById: collection.sessionById, childrenMap: collection.childrenMap, runKeyBySessionId, live: liveFacts, planSessionIds, planKnownProjectIds, folderByMember };
     const factsByKey = new Map<string, SidebarWorkFacts>();
     return resolveSidebarSectionMembership({
       sections: visibleSections,
@@ -652,7 +652,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       },
       now: Math.max(sectionsNow, Date.now()),
     });
-  }, [collection.childrenMap, collection.sessionById, folderByMember, liveFacts, planSessionIds, projectIds, runKeyBySessionId, sectionCandidates, sectionsNow, visibleSections]);
+  }, [collection.childrenMap, collection.sessionById, folderByMember, liveFacts, planSessionIds, planKnownProjectIds, projectIds, runKeyBySessionId, sectionCandidates, sectionsNow, visibleSections]);
   React.useEffect(() => {
     if (!sectionDraft) return;
     const count = sectionDraft.grouping === 'project'

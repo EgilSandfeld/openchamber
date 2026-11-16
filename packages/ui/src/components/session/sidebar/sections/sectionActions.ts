@@ -1,3 +1,4 @@
+import { removeSidebarSectionCondition } from './sectionExclusionActions';
 import { create } from 'zustand';
 import { updateDesktopSettings } from '@/lib/persistence';
 import {
@@ -90,9 +91,7 @@ export const removeFolderFromSections = (id: string): void => stopAskingFor('fol
 const stopAskingFor = (category: 'pins' | 'folders', id: string): void => {
   const current = useSessionDisplayStore.getState().sections;
   const sections = current.flatMap((entry): SidebarSectionEntry[] => {
-    if (entry.kind !== 'custom' || !entry.filter[category].includes(id)) return [entry];
-    const values = entry.filter[category].filter((value) => value !== id);
-    return values.length === 0 ? [] : [{ ...entry, filter: { ...entry.filter, [category]: values } }];
+    return removeSidebarSectionCondition(entry, category, id);
   });
   if (sections.length !== current.length || sections.some((entry, index) => entry !== current[index])) saveSidebarSections(sections);
 };
